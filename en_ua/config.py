@@ -6,6 +6,7 @@ from pathlib import Path
 
 DEFAULTS = {
     'enabled': True,
+    'selection_shortcut': 'Ctrl+Alt+Space',
     'autostart': True,
     'minimum_word_length': 4,
     'switch_layout': True,

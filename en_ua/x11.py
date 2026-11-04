@@ -1,7 +1,7 @@
 """Passive X11 RECORD observer and narrowly scoped XTEST replacement.
 
-Normal keystrokes are never intercepted. Only a recognised wrong-layout word
-followed by a released Space can trigger a replacement.
+Normal keystrokes are observed without interception. Recognised words and
+explicitly selected text can trigger replacement.
 """
 
 from collections import deque
@@ -13,6 +13,7 @@ import threading
 import time
 
 from .background_core import WordTracker
+from .shortcut import parse_shortcut, convert_selection
 
 TERMINALS = ('terminal', 'terminator', 'kitty', 'alacritty', 'konsole', 'xterm',
              'wezterm', 'tilix', 'terminology', 'guake', 'yakuake', 'tabby')
@@ -237,7 +238,10 @@ class X11Monitor:
             except queue.Empty:
                 continue
             try:
-                self.replace(plan, serial)
+                if isinstance(plan, tuple):
+                    self.replace_selection(plan[1], serial)
+                else:
+                    self.replace(plan, serial)
             except Exception as error:
                 self.on_status(f'Correction skipped: {type(error).__name__}')
             finally:
@@ -296,7 +300,7 @@ class X11Monitor:
                 break
         return focus_id, ''
 
-    def allowed(self, app):
+    def allowed(self, app, manual=False):
         if not self.config.data['enabled'] or self.protected or not app:
             return False
         if any(str(name).lower() in app for name in self.config.data['excluded_apps'] if name):
@@ -328,7 +332,7 @@ class X11Monitor:
                 if event.type in (X.KeyPress, X.ButtonPress):
                     self.input_serial += 1
                 focus, app = self.focus()
-                if not self.allowed(app):
+                if not self.allowed(app, manual=True):
                     self.tracker.reset()
                     continue
                 if event.type == X.ButtonPress:
@@ -336,6 +340,15 @@ class X11Monitor:
                 elif event.type == X.KeyPress:
                     state = self.keyboard.normalize_state(event.state)
                     symbol = self.keyboard.symbol(event.detail, (state >> 13) & 3)
+                    shortcut = parse_shortcut(self.config.data['selection_shortcut'])
+                    if shortcut and (state & (1 | 4 | 8 | 64 | 128)) == shortcut[0] and (symbol == shortcut[1] or self.keyboard.symbol(event.detail, self.keyboard.group_for('en') or 0) == shortcut[1]):
+                        self.tracker.reset(blocked=True)
+                        if not self.replay_pending:
+                            self.replay_pending = True
+                            self.jobs.put((('selection', focus), self.input_serial))
+                        continue
+                    if not self.config.data['enabled']:
+                        continue
                     if symbol in (0xffe1, 0xffe2, 0xffe3, 0xffe4, 0xffe9, 0xffea,
                                   0xffeb, 0xffec, 0xffe5, 0xfe03, 0xff7f):
                         continue
@@ -345,7 +358,7 @@ class X11Monitor:
                         char = None
                     self.tracker.press(char, focus, event.time,
                                        shortcut=bool(state & (4 | 8 | 64 | 128)))
-                elif event.type == X.KeyRelease:
+                elif event.type == X.KeyRelease and self.config.data['enabled']:
                     if self.keyboard.symbol(event.detail, (event.state >> 13) & 3) == 0x20:
                         plan = self.tracker.release_space(focus)
                         if plan and not self.replay_pending:
@@ -355,6 +368,90 @@ class X11Monitor:
             self.tracker.reset(blocked=True)
             self.synthetic.clear()
             self.on_status(f'Correction skipped: {type(error).__name__}')
+
+    def replace_selection(self, focus, serial):
+        """Read the X11 primary selection and replace it with mapped key events."""
+        from Xlib import X
+        from gi.repository import Gtk, Gdk, GLib
+
+        # Wait until the shortcut is released before replaying any keys.
+        deadline = time.monotonic() + 2
+        while any(self.control.query_keymap()) and time.monotonic() < deadline:
+            if serial != self.input_serial or self.stopping.wait(0.01):
+                return
+        if any(self.control.query_keymap()):
+            self.last_skip = 'shortcut keys still held'
+            return
+        result = []
+        ready = threading.Event()
+
+        def read_selection():
+            try:
+                result.append(Gtk.Clipboard.get(Gdk.SELECTION_PRIMARY).wait_for_text())
+            finally:
+                ready.set()
+            return False
+
+        GLib.idle_add(read_selection)
+        if not ready.wait(2) or not result or not result[0]:
+            self.last_skip = 'no selected text'
+            return
+        converted = convert_selection(result[0])
+        if not converted:
+            self.last_skip = 'selection has no clear English or Ukrainian text'
+            return
+        text, language = converted
+        current_focus, app = self.focus()
+        if serial != self.input_serial or current_focus != focus or not self.allowed(app, manual=True):
+            self.last_skip = 'focus or input changed before selection conversion'
+            return
+        state = self.keyboard.state()
+        group = self.keyboard.group_for(language)
+        if group is None:
+            self.last_skip = 'target keyboard layout is unavailable'
+            return
+        if self.keyboard.strokes(text, group, bool(state.locked_mods & 2)) is None:
+            self.last_skip = 'selection contains unsupported characters'
+            return
+        previous = next((lang for lang in ('en', 'uk') if self.keyboard.group_for(lang) == state.group), None)
+        if not self.config.data['switch_layout'] and previous is None:
+            self.last_skip = 'cannot restore an unsupported input source'
+            return
+        if self.layout_switcher:
+            group = self.layout_switcher.switch(self, language, serial, focus)
+            if group is None:
+                return
+        else:
+            self.keyboard.lock_group(group)
+            if not self._settle_group(group, serial):
+                return
+        strokes = self.keyboard.strokes(text, group, bool(state.locked_mods & 2))
+        current_focus, app = self.focus()
+        if (strokes is None or serial != self.input_serial or current_focus != focus
+                or not self.allowed(app, manual=True) or any(self.control.query_keymap())
+                or self.keyboard.state().group != group):
+            self.last_skip = 'selection contains unsupported characters or focus changed'
+        else:
+            shift = self.control.keysym_to_keycode(0xffe1)
+            events = []
+            for code, shifted in strokes:
+                if shifted:
+                    events.append((X.KeyPress, shift))
+                events.extend(((X.KeyPress, code), (X.KeyRelease, code)))
+                if shifted:
+                    events.append((X.KeyRelease, shift))
+            self.synthetic.extend(events)
+            for event_type, code in events:
+                self.control.xtest_fake_input(event_type, code, time=2)
+            self.control.sync()
+            self.corrections += 1
+            self.last_skip = ''
+        if not self.config.data['switch_layout'] and serial == self.input_serial:
+            self.stopping.wait(0.05)
+            if self.layout_switcher:
+                self.layout_switcher.switch(self, previous, serial, focus)
+            else:
+                self.keyboard.lock_group(state.locked_group)
 
     def _settle_group(self, group, serial, *, ready=None, stable_for=0.08, timeout=0.3):
         """Wait for clients to observe a stable group, while RECORD keeps running.

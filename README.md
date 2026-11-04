@@ -2,13 +2,17 @@
 
 A quiet Ubuntu **X11 background utility** with a tray icon. Keep using your
 normal English (US) and Ukrainian keyboard layouts. There is no special input
-source to select and no preedit underline or input-mode shortcut.
+source to select and no preedit underline.
 
 Type normally. After Space is released, a recognised wrong-layout word such as
 `ghbdsn` is replaced with `привіт`. The reverse direction works too: `руддщ`
 becomes `hello`. By default the keyboard switches to the corrected language
 for the next word. Words that already exist in the current language, ambiguous
 words, unknown names and words shorter than four characters are left alone.
+
+Select text in an editable application and press **Ctrl+Alt+Space** to convert
+its keyboard positions between English and Ukrainian. The shortcut can be changed
+in Settings; the direction follows the majority of English or Ukrainian letters.
 
 ## Install / upgrade
 
@@ -46,6 +50,7 @@ Settings include:
 * Minimum word length (4–12 characters).
 * Per-application exclusions using case-insensitive X11 WM_CLASS fragments.
 * Optional terminal correction, disabled by default.
+* Shortcut for manually converting selected text (default Ctrl+Alt+Space).
 
 Settings are saved in `~/.config/en-ua-switcher/settings.json`. Typed words,
 clipboard data and document contents are never saved or sent over the network.
@@ -93,8 +98,7 @@ Fast typing with overlapping keys may skip a correction to avoid interfering.
 This is a dictionary-based helper, not a language model. An unknown intended
 word can still map to a known word in the other language and be corrected
 incorrectly. Applications that autoformat text or treat Backspace/Space as
-commands may be unsuitable: add them to exclusions. Existing text and pasted
-text are never scanned or rewritten. Replacements are best effort, not an
+commands may be unsuitable: add them to exclusions. Existing or pasted text is changed only when you explicitly select it and invoke the manual shortcut. Replacements are best effort, not an
 atomic document edit; an application or focus change during replay can still
 interrupt them. Ordinary editor Undo can revert the replay, potentially over
 several undo steps; there is no global undo shortcut.
@@ -105,6 +109,15 @@ not every application does. Enabling terminal correction also affects shell
 commands and unmarked password prompts, so leave it off when that would be
 unwanted. The global observer cannot promise password-field detection in all
 applications. It never reads field values or surrounding document text.
+
+Manual conversion reads the X11 primary selection and types the result over the
+selection; it does not use or change the clipboard. It requires an editable,
+active selection in the focused application. It skips text that cannot be typed
+with the installed layout, including line breaks, and skips selections with no
+clear majority language. The shortcut is observed rather than intercepted, so
+avoid combinations already used by the desktop or application. Application
+exclusions, terminal and password protection, and the enable switch apply to
+manual conversion as well.
 
 The supported desktop path is X11 with RECORD and XTEST. Native Wayland apps,
 raw virtual consoles, and applications with raw/exclusive input are unsupported.

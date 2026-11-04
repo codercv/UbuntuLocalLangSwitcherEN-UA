@@ -10,6 +10,7 @@ from gi.repository import Gtk, Gio, GLib, AyatanaAppIndicator3 as Indicator
 
 from .config import Config, retire_legacy_source
 from .core import Dictionaries
+from .shortcut import parse_shortcut
 from . import __version__
 
 
@@ -168,16 +169,30 @@ class TrayApplication(Gtk.Application):
         minimum.set_value(self.config.data['minimum_word_length'])
         row.pack_start(minimum, False, False, 0)
         box.pack_start(row, False, False, 0)
+        row = Gtk.Box(spacing=12)
+        row.pack_start(Gtk.Label(label='Convert selected text shortcut'), False, False, 0)
+        shortcut = Gtk.Entry()
+        shortcut.set_text(self.config.data['selection_shortcut'])
+        shortcut.set_placeholder_text('Ctrl+Alt+Space')
+        row.pack_start(shortcut, True, True, 0)
+        box.pack_start(row, False, False, 0)
+        label('Enter a key with Ctrl, Alt, Shift or Super, for example Ctrl+Alt+Space.')
+        error_label = label('')
         label('Excluded applications (parts of their X11 WM_CLASS, separated by commas)')
         excluded = Gtk.Entry()
         excluded.set_text(', '.join(self.config.data['excluded_apps']))
         box.pack_start(excluded, False, False, 0)
-        label('This version supports X11. It uses neither the clipboard nor a special input method. '
+        label('This version supports X11. It uses the X11 primary selection but not the clipboard. '
               'It cannot correct raw Linux virtual consoles or native Wayland apps.')
         actions = Gtk.Box(spacing=10)
         box.pack_start(actions, False, False, 0)
 
         def save(*_):
+            shortcut_value = shortcut.get_text().strip()
+            if not parse_shortcut(shortcut_value):
+                error_label.set_text('Invalid shortcut. Use e.g. Ctrl+Alt+Space with a valid key name.')
+                return
+            self.config.data['selection_shortcut'] = shortcut_value
             for key, button in controls.items():
                 self.config.data[key] = button.get_active()
             self.config.data['minimum_word_length'] = minimum.get_value_as_int()

@@ -187,3 +187,73 @@ class X11BackgroundTests(unittest.TestCase):
                 keyboard.close()
                 window.destroy()
                 client.close()
+
+
+@unittest.skipUnless(os.environ.get('EN_UA_X11_TEST') == '1', 'requires an isolated Xvfb display')
+class X11SelectionTests(unittest.TestCase):
+    def test_shortcut_converts_selected_text_in_gtk_entry(self):
+        import gi
+        gi.require_version('Gtk', '3.0')
+        from gi.repository import Gtk, GLib
+        from Xlib import X, display
+        from en_ua.x11 import X11Monitor
+
+        client = display.Display()
+        subprocess.run(['setxkbmap', '-layout', 'us,ua'], check=True)
+        window = Gtk.Window()
+        window.set_wmclass('selection-test', 'SelectionTest')
+        entry = Gtk.Entry()
+        entry.set_text('ghbdsn')
+        window.add(entry)
+        window.show_all()
+        window.present()
+        entry.grab_focus()
+        entry.select_region(0, -1)
+        context = GLib.MainContext.default()
+        for _ in range(20):
+            while context.pending():
+                context.iteration(False)
+            time.sleep(0.01)
+        with tempfile.TemporaryDirectory() as directory:
+            monitor = X11Monitor(Config(os.path.join(directory, 'settings.json')), TestDictionaries())
+            try:
+                monitor.start()
+                time.sleep(0.1)
+                keys = [client.keysym_to_keycode(key) for key in (0xffe3, 0xffe9, 0x20)]
+                for code in keys:
+                    client.xtest_fake_input(X.KeyPress, code)
+                for code in reversed(keys):
+                    client.xtest_fake_input(X.KeyRelease, code)
+                client.sync()
+                deadline = time.monotonic() + 4
+                while time.monotonic() < deadline and monitor.corrections == 0:
+                    while context.pending():
+                        context.iteration(False)
+                    time.sleep(0.01)
+                self.assertEqual(entry.get_text(), 'привіт', monitor.last_skip)
+                self.assertEqual(monitor.corrections, 1, monitor.last_skip)
+                monitor.config.data['selection_shortcut'] = 'Ctrl+Shift+F8'
+                entry.set_text('руддщ')
+                entry.select_region(0, -1)
+                while context.pending():
+                    context.iteration(False)
+                time.sleep(0.1)
+                keys = [client.keysym_to_keycode(key) for key in (0xffe3, 0xffe1, 0xffc5)]
+                for code in keys:
+                    client.xtest_fake_input(X.KeyPress, code)
+                for code in reversed(keys):
+                    client.xtest_fake_input(X.KeyRelease, code)
+                client.sync()
+                deadline = time.monotonic() + 4
+                while time.monotonic() < deadline and monitor.corrections < 2:
+                    while context.pending():
+                        context.iteration(False)
+                    time.sleep(0.01)
+                while context.pending():
+                    context.iteration(False)
+                self.assertEqual(entry.get_text(), 'hello', monitor.last_skip)
+                self.assertEqual(monitor.corrections, 2, monitor.last_skip)
+            finally:
+                monitor.stop()
+                window.destroy()
+                client.close()
