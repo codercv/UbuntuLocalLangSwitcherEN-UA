@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=English / Ukrainian Auto Layout
+Comment=Quiet automatic layout correction
+Exec=en-ua-switcher --background
+Icon=input-keyboard
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

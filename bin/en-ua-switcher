@@ -1,0 +1,10 @@
+#!/usr/bin/python3
+"""Launcher for installed package or a source checkout."""
+from pathlib import Path
+import sys
+
+checkout = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(checkout if (checkout / 'en_ua').is_dir() else Path('/usr/share/en-ua-switcher')))
+from en_ua.__main__ import main
+
+sys.exit(main())

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=English / Ukrainian Auto Layout
+Name[uk]=Автоматична розкладка EN / UA
+Comment=Configure quiet background English and Ukrainian layout correction
+Exec=en-ua-switcher --setup
+Icon=input-keyboard
+Terminal=false
+Categories=Settings;
+Keywords=keyboard;language;Ukrainian;English;layout;tray;
